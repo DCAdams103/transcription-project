@@ -7,6 +7,8 @@ from ctypes import windll
 import pyaudio
 import wave
 import shutil
+import whisper
+import time
 
 # Fixes blurry text
 windll.shcore.SetProcessDpiAwareness(1)
@@ -46,7 +48,10 @@ class App(tk.Tk):
         pause = ttk.Button(mainframe, text="Pause")
         play = ttk.Button(mainframe, text="Play")
         upload = ttk.Button(mainframe, text="Upload File")
-
+        transcribe = ttk.Button(mainframe, text="Transcribe")
+        self.textarea = Text(mainframe, height = 5, width = 52)
+        live = ttk.Button(mainframe, text='Start Live')
+        
         record.config(command=lambda: [self.recordcallback(), self.updateRecordText(record)])
         record.pack()
 
@@ -59,6 +64,14 @@ class App(tk.Tk):
         pause.config(command=lambda: [self.setPaused(), self.disableBtn(pause), self.enable_btn(play)])
         self.disableBtn(pause)
         pause.pack()
+
+        transcribe.config(command=lambda: [self.transcriptAudio()])
+        transcribe.pack()
+
+        live.config(command=lambda:[self.startLive()])
+        live.pack()
+        
+        self.textarea.pack(pady=15)
 
     def updateRecordText(self, record):
         if record['text'] == 'Record':
@@ -80,8 +93,6 @@ class App(tk.Tk):
         filePath = filedialog.askopenfilename(initialdir='/', title='Select a file', filetypes=(('wav', '*.wav'), ('mp3', '*.mp3')))
         
         shutil.copy(r''+filePath, 'output.wav')
-
-        f.close()
 
     def recordcallback(self):
 
@@ -180,6 +191,38 @@ class App(tk.Tk):
             t = threading.Thread(target=self.play_loop, args=(play, pause,))
             t.start()
         
+    def transcriptAudio(self):
+        model = whisper.load_model("base")
+        result = model.transcribe("output.wav")
+        self.textarea.insert(INSERT, result['text'])
+
+    def reset_recording(self):
+        if self.recording:
+            self.recording = False
+            #self.recordcallback()
+        else:
+            self.recordcallback()
+
+
+
+    def live_loop(self):
+        tic_one = time.perf_counter()
+        count = 0
+        self.reset_recording()
+        while True:
+            if(time.perf_counter() - tic_one >= 2):
+                #count += 1
+                self.transcriptAudio()
+                tic_one = time.perf_counter()
+                self.reset_recording()
+
+
+            if count == 3:
+                break
+
+    def startLive(self):
+        l = threading.Thread(target=self.live_loop)
+        l.start()
 
 app = App()
 app.mainloop()
