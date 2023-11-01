@@ -9,6 +9,14 @@ import wave
 import shutil
 import whisper
 import time
+import torch
+from tempfile import NamedTemporaryFile
+import speech_recognition as sr
+from queue import Queue
+from datetime import datetime, timedelta
+import io
+from time import sleep
+import os
 
 # Fixes blurry text
 windll.shcore.SetProcessDpiAwareness(1)
@@ -35,6 +43,28 @@ class App(tk.Tk):
         self.recording = False
         self.playing = False
         self.paused = False
+
+        # Set up SpeechRecognition
+        self.recorder = sr.Recognizer()
+        self.recorder.energy_threshold = 1000
+        self.recorder.dynamic_energy_threshold = False
+        self.source = sr.Microphone(sample_rate=16000)
+
+        self.record_timeout = 2
+        self.phase_timeout = 3
+
+        self.phase_time = None
+        self.last_sample = bytes()
+        self.data_queue = Queue()
+
+        self.temp_file = NamedTemporaryFile().name
+
+        self.model = whisper.load_model("base")
+
+        self.transcription_text = ['']
+
+        with self.source:
+            self.recorder.adjust_for_ambient_noise(self.source)
 
         mainframe = ttk.Frame(self)
         mainframe.pack(side=TOP)
@@ -68,10 +98,62 @@ class App(tk.Tk):
         transcribe.config(command=lambda: [self.transcriptAudio()])
         transcribe.pack()
 
-        live.config(command=lambda:[self.startLive()])
+        live.config(command=lambda:[self.sr_test()])
         live.pack()
         
         self.textarea.pack(pady=15)
+
+    def sr_callback(self, _, audio: sr.AudioData) -> None:
+        self.data = audio.get_raw_data()
+        self.data_queue.put(self.data)
+
+    def sr_test(self):
+        s = threading.Thread(target=self.sr_loop)
+        s.start()
+
+    def sr_loop(self):
+        self.recorder.listen_in_background(self.source, self.sr_callback, phrase_time_limit=self.record_timeout)
+
+        while True:
+            try:
+                now = datetime.utcnow()
+
+                if not self.data_queue.empty():
+                    phrase_complete = False
+
+                    if self.phase_time and now - self.phase_time > timedelta(seconds=self.phase_timeout):
+                        self.last_sample = bytes()
+                        phrase_complete = True
+
+                    self.phase_time = now
+
+                    while not self.data_queue.empty():
+                        data = self.data_queue.get()
+                        self.last_sample += data
+
+                    audio_data = sr.AudioData(self.last_sample, self.source.SAMPLE_RATE, self.source.SAMPLE_WIDTH)
+                    wav_data = io.BytesIO(audio_data.get_wav_data())
+
+                    with open(self.temp_file, 'w+b') as f:
+                        f.write(wav_data.read())
+
+                    result = self.model.transcribe(self.temp_file, fp16=torch.cuda.is_available())
+                    text = result['text'].strip()
+
+                    if phrase_complete:
+                        self.transcription_text.append(text)
+                    else:
+                        self.transcription_text[-1] = text
+
+                    os.system('cls' if os.name=='nt' else 'clear')
+
+                    for line in self.transcription_text:
+                        print(line)
+
+                    print('', end='', flush=True)
+                    sleep(0.25)
+            except KeyboardInterrupt:
+                break
 
     def updateRecordText(self, record):
         if record['text'] == 'Record':
@@ -190,11 +272,14 @@ class App(tk.Tk):
             self.playThread.set()
             t = threading.Thread(target=self.play_loop, args=(play, pause,))
             t.start()
+
+    def transcript_thread(self):
+        result = self.model.transcribe("output.wav", fp16=torch.cuda.is_available())
+        self.textarea.insert(INSERT, result['text'])
         
     def transcriptAudio(self):
-        model = whisper.load_model("base")
-        result = model.transcribe("output.wav")
-        self.textarea.insert(INSERT, result['text'])
+        t = threading.Thread(target=self.transcript_thread())
+        t.start()
 
     def reset_recording(self):
         if self.recording:
@@ -202,7 +287,6 @@ class App(tk.Tk):
             #self.recordcallback()
         else:
             self.recordcallback()
-
 
 
     def live_loop(self):
@@ -215,7 +299,6 @@ class App(tk.Tk):
                 self.transcriptAudio()
                 tic_one = time.perf_counter()
                 self.reset_recording()
-
 
             if count == 3:
                 break
