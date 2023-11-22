@@ -4,19 +4,20 @@ import tkinter as tk
 from tkinter import *
 from tkinter import ttk, filedialog
 from ctypes import windll
-import pyaudio
-import wave
-import shutil
-import whisper
-import time
-import torch
-from tempfile import NamedTemporaryFile
-import speech_recognition as sr
+import pyaudio                              # Record / Play audio
+import wave                                 # Audio file
+import shutil                               # File copy
+import whisper                              # Transcription engine
+import time                         
+import torch                                # GPU Acceleration
+from tempfile import NamedTemporaryFile     
+import speech_recognition as sr             
 from queue import Queue
 from datetime import datetime, timedelta
 import io
-from time import sleep
 import os
+from gradio_client import Client # Whisper JAX
+from pickle import Pickler, Unpickler
 
 # Fixes blurry text
 windll.shcore.SetProcessDpiAwareness(1)
@@ -36,77 +37,60 @@ class App(tk.Tk):
         self.title("Voice Recognition")
         self.geometry("800x600")
 
-        self.recordThread = threading.Event()
-        self.playThread = threading.Event()
-        self.stream = None
-        self.frames = []
-        self.recording = False
-        self.playing = False
-        self.paused = False
+        
+        # # Set up SpeechRecognition
+        # self.recorder = sr.Recognizer()
+        # self.recorder.energy_threshold = 1000
+        # self.recorder.dynamic_energy_threshold = False
+        # self.source = sr.Microphone(sample_rate=16000)
+        # self.record_timeout = 2
+        # self.phase_timeout = 3
+        # self.phase_time = None
+        # self.last_sample = bytes()
+        # self.data_queue = Queue()
+        # self.model = whisper.load_model("medium")
+        # self.transcription_text = ['']
 
-        # Set up SpeechRecognition
-        self.recorder = sr.Recognizer()
-        self.recorder.energy_threshold = 1000
-        self.recorder.dynamic_energy_threshold = False
-        self.source = sr.Microphone(sample_rate=16000)
+        # with self.source as source:
+        #     self.recorder.adjust_for_ambient_noise(source)
 
-        self.record_timeout = 2
-        self.phase_timeout = 3
-
-        self.phase_time = None
-        self.last_sample = bytes()
-        self.data_queue = Queue()
-
-        self.temp_file = NamedTemporaryFile().name
-
-        self.model = whisper.load_model("base")
-
-        self.transcription_text = ['']
-
-        with self.source:
-            self.recorder.adjust_for_ambient_noise(self.source)
-
-        mainframe = ttk.Frame(self)
-        mainframe.pack(side=TOP)
-        label = ttk.Label(mainframe, text="Voice Recognition Transcriber", font=("Arial", 25))
-        label.pack(side=TOP)
-        label2 = ttk.Label(mainframe, text="By Team 2")
-        label2.pack(side=TOP)
+        self.mainframe = ttk.Frame(self)
+        self.mainframe.pack(side=TOP)
+        
 
         # Define buttons
-        record = ttk.Button(mainframe, text="Record")
-        pause = ttk.Button(mainframe, text="Pause")
-        play = ttk.Button(mainframe, text="Play")
-        upload = ttk.Button(mainframe, text="Upload File")
-        transcribe = ttk.Button(mainframe, text="Transcribe")
-        self.textarea = Text(mainframe, height = 5, width = 52)
-        live = ttk.Button(mainframe, text='Start Live')
         
-        record.config(command=lambda: [self.recordcallback(), self.updateRecordText(record)])
-        record.pack()
+        # live = ttk.Button(mainframe, text='Start Live')
 
-        upload.config(command=lambda: [self.upload_file()])
-        upload.pack()
-        
-        play.config(command=lambda: [self.playaudioback(play, pause)])
-        play.pack()
-        
-        pause.config(command=lambda: [self.setPaused(), self.disableBtn(pause), self.enable_btn(play)])
-        self.disableBtn(pause)
-        pause.pack()
+        # live.config(command=lambda:[self.sr_test()])
+        # live.pack()
 
-        transcribe.config(command=lambda: [self.transcriptAudio()])
-        transcribe.pack()
+        # switch.config(command=self.switchframe)
 
-        live.config(command=lambda:[self.sr_test()])
-        live.pack()
+        self.mainframe.pack(side="top", fill="both", expand=True)
+        self.mainframe.grid_rowconfigure(0, weight=1)
+        self.mainframe.grid_columnconfigure(0, weight=1)
+
+        self.frames = {}
+        for F in (StartPage, TranscribePage, LivePage):
+            page = F.__name__
+            frame = F(parent=self.mainframe, controller=self)
+            self.frames[page] = frame
+
+            frame.grid(row=0, column=0, sticky="nsew")
         
-        self.textarea.pack(pady=15)
+        self.show_frame("StartPage")
+
+
+    def show_frame(self, page):
+        frame = self.frames[page]
+        frame.tkraise()
 
     def sr_callback(self, _, audio: sr.AudioData) -> None:
         self.data = audio.get_raw_data()
         self.data_queue.put(self.data)
 
+    # Live Transcription
     def sr_test(self):
         s = threading.Thread(target=self.sr_loop)
         s.start()
@@ -151,32 +135,94 @@ class App(tk.Tk):
                         print(line)
 
                     print('', end='', flush=True)
-                    sleep(0.25)
+                    time.sleep(0.25)
+
             except KeyboardInterrupt:
                 break
 
-    def updateRecordText(self, record):
-        if record['text'] == 'Record':
-            record.config(text='Stop Recording')
-        else:
-            record.config(text='Record')
+    def live_loop(self):
+        tic_one = time.perf_counter()
+        count = 0
+        self.reset_recording()
+        while True:
+            if(time.perf_counter() - tic_one >= 2):
+                #count += 1
+                self.transcript_audio()
+                tic_one = time.perf_counter()
+                self.reset_recording()
 
-    def disableBtn(self, btn):
-        btn['state'] = 'disabled'
+            if count == 3:
+                break
 
-    def enable_btn(self, btn):
-        btn['state'] = 'enabled'
+    def start_live_recording(self):
+        l = threading.Thread(target=self.live_loop)
+        l.start()
 
-    def setPaused(self):
-        self.paused = not self.paused
 
-    def upload_file(self):
+class StartPage(tk.Frame):
+
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self, parent)
+        self.controller = controller
+
+        label = ttk.Label(self, text="Voice Recognition Transcriber", font=("Arial", 25))
+        label.pack(side=TOP)
+
+        label2 = ttk.Label(self, text="By Team 2")
+        label2.pack(side=TOP)
+
+        button = tk.Button(self, text="Transcribe", command=lambda:controller.show_frame("TranscribePage"))
+        button.pack()
+
+        button1 = tk.Button(self, text="Live", command=lambda:controller.show_frame("LivePage"))
+        button1.pack()
+
+class TranscribePage(tk.Frame):
+
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self, parent)
+        self.controller = controller
+        home = ttk.Button(self, text="Back")
+        record = ttk.Button(self, text="Record")
+        pause = ttk.Button(self, text="Pause")
+        play = ttk.Button(self, text="Play")
+        upload = ttk.Button(self, text="Upload File")
+        transcribe = ttk.Button(self, text="Transcribe")
+        self.textarea = Text(self, height = 5, width = 52)
         
-        filePath = filedialog.askopenfilename(initialdir='/', title='Select a file', filetypes=(('wav', '*.wav'), ('mp3', '*.mp3')))
-        
-        shutil.copy(r''+filePath, 'output.wav')
+        home.config(command=lambda:controller.show_frame("StartPage"))
+        home.pack()
 
-    def recordcallback(self):
+        record.config(command=lambda: [self.record_callback(), self.update_record_text(record)])
+        record.pack()
+
+        upload.config(command=lambda: [self.upload_file()])
+        upload.pack()
+        
+        play.config(command=lambda: [self.play_recording(play, pause)])
+        play.pack()
+        
+        pause.config(command=lambda: [self.setPaused(), self.disable_button(pause), self.enable_btn(play)])
+        self.disable_button(pause)
+        pause.pack()
+
+        transcribe.config(command=lambda: [self.transcript_audio()])
+        transcribe.pack()
+
+        self.textarea.pack(pady=15)
+
+        self.recordThread = threading.Event()
+        self.playThread = threading.Event()
+        self.stream = None
+        self.frames = []
+        self.recording = False
+        self.playing = False
+        self.paused = False
+
+        self.temp_file = NamedTemporaryFile().name
+
+
+    def record_callback(self):
 
         if self.recording:
             self.recording = not self.recording
@@ -197,8 +243,8 @@ class App(tk.Tk):
             self.recordThread.set()
             t = threading.Thread(target=self.record_loop, args=(p,))
             t.start()
-            
 
+    # Record Audio
     def record_loop(self, p):
         while self.recording:
             data = self.stream.read(chunk)
@@ -224,7 +270,23 @@ class App(tk.Tk):
 
         print("finished recording")
 
-    def play_loop(self, play, pause):
+    # Upload File
+    def upload_file(self):
+        filePath = filedialog.askopenfilename(initialdir='/', title='Select a file', filetypes=(('wav', '*.wav'), ('mp3', '*.mp3')))
+        shutil.copy(r''+filePath, 'output.wav')
+
+    def play_recording(self, play, pause):
+
+        if self.playing:
+            self.paused = False
+            self.enable_btn(pause)
+        else:
+            self.playThread.set()
+            t = threading.Thread(target=self.play_thread, args=(play, pause,))
+            t.start()
+
+    # Play Recording 
+    def play_thread(self, play, pause):
         try:
             # Open sound file
             wf = wave.open(filename, 'rb')
@@ -233,7 +295,7 @@ class App(tk.Tk):
             self.playing = True
 
             self.enable_btn(pause)
-            self.disableBtn(play)
+            self.disable_button(play)
 
             stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
                             channels=wf.getnchannels(),
@@ -255,7 +317,7 @@ class App(tk.Tk):
             self.playThread.clear()
             self.playing = False
             self.paused = False
-            self.disableBtn(pause)
+            self.disable_button(pause)
             self.enable_btn(play)
 
             print("Play finished")
@@ -263,49 +325,55 @@ class App(tk.Tk):
             print('File not found')
             self.playThread.clear()
 
-    def playaudioback(self, play, pause):
-
-        if self.playing:
-            self.paused = False
-            self.enable_btn(pause)
-        else:
-            self.playThread.set()
-            t = threading.Thread(target=self.play_loop, args=(play, pause,))
-            t.start()
-
     def transcript_thread(self):
-        result = self.model.transcribe("output.wav", fp16=torch.cuda.is_available())
-        self.textarea.insert(INSERT, result['text'])
+        # result = self.model.transcribe("output.wav", fp16=torch.cuda.is_available())
+        client = Client("https://sanchit-gandhi-whisper-jax.hf.space/")
+        result = client.predict(
+				"output.wav",	# str (filepath or URL to file) in 'inputs' Audio component
+				"transcribe",	# str in 'Task' Radio component
+				True,	# bool in 'Return timestamps' Checkbox component
+				api_name="/predict"
+        )
+        print(result)
+
+        #self.textarea.insert(INSERT, result['text'])
         
-    def transcriptAudio(self):
-        t = threading.Thread(target=self.transcript_thread())
+    def transcript_audio(self):
+        t = threading.Thread(target=self.transcript_thread)
         t.start()
+
+    # Update GUI Functions
+    def update_record_text(self, record):
+        if record['text'] == 'Record':
+            record.config(text='Stop Recording')
+        else:
+            record.config(text='Record')
+
+    def disable_button(self, btn):
+        btn['state'] = 'disabled'
+
+    def enable_btn(self, btn):
+        btn['state'] = 'enabled'
+
+    # Reset Value Functions
+    def setPaused(self):
+        self.paused = not self.paused
 
     def reset_recording(self):
         if self.recording:
             self.recording = False
-            #self.recordcallback()
+            #self.record_callback()
         else:
-            self.recordcallback()
+            self.record_callback()
 
+class LivePage(tk.Frame):
 
-    def live_loop(self):
-        tic_one = time.perf_counter()
-        count = 0
-        self.reset_recording()
-        while True:
-            if(time.perf_counter() - tic_one >= 2):
-                #count += 1
-                self.transcriptAudio()
-                tic_one = time.perf_counter()
-                self.reset_recording()
+    def __init__(self, parent, controller):
+        tk.Frame.__init__(self, parent)
+        self.controller = controller
+        label = tk.Label(self, text="Live")
+        label.pack()
 
-            if count == 3:
-                break
-
-    def startLive(self):
-        l = threading.Thread(target=self.live_loop)
-        l.start()
-
-app = App()
-app.mainloop()
+if __name__ == "__main__":
+    app = App()
+    app.mainloop()
