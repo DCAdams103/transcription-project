@@ -2,7 +2,7 @@
 import threading
 import tkinter as tk
 from tkinter import *
-from tkinter import ttk, filedialog
+from tkinter import filedialog
 from ctypes import windll
 import pyaudio                              # Record / Play audio
 import wave                                 # Audio file
@@ -18,6 +18,8 @@ import io
 import os
 from gradio_client import Client # Whisper JAX
 from pickle import Pickler, Unpickler
+import customtkinter
+from CTkToolTip import *
 
 # Fixes blurry text
 windll.shcore.SetProcessDpiAwareness(1)
@@ -31,12 +33,13 @@ seconds = 3
 filename = "output.wav"
 
 
-class App(tk.Tk):
+class App(customtkinter.CTk):
     def __init__(self):
         super().__init__()
         self.title("Voice Recognition")
         self.geometry("800x600")
-
+        customtkinter.set_appearance_mode("Dark")
+        customtkinter.set_default_color_theme("dark-blue")
         
         # # Set up SpeechRecognition
         # self.recorder = sr.Recognizer()
@@ -54,9 +57,8 @@ class App(tk.Tk):
         # with self.source as source:
         #     self.recorder.adjust_for_ambient_noise(source)
 
-        self.mainframe = ttk.Frame(self)
+        self.mainframe = customtkinter.CTkFrame(self, bg_color="black")
         self.mainframe.pack(side=TOP)
-        
 
         # Define buttons
         
@@ -159,57 +161,68 @@ class App(tk.Tk):
         l.start()
 
 
-class StartPage(tk.Frame):
+class StartPage(customtkinter.CTkFrame):
 
     def __init__(self, parent, controller):
-        tk.Frame.__init__(self, parent)
+        customtkinter.CTkFrame.__init__(self, parent)
         self.controller = controller
 
-        label = ttk.Label(self, text="Voice Recognition Transcriber", font=("Arial", 25))
+        label = customtkinter.CTkLabel(self, text="Voice Recognition Transcriber", font=("Arial", 25))
         label.pack(side=TOP)
 
-        label2 = ttk.Label(self, text="By Team 2")
+        label2 = customtkinter.CTkLabel(self, text="By Team 2")
         label2.pack(side=TOP)
 
-        button = tk.Button(self, text="Transcribe", command=lambda:controller.show_frame("TranscribePage"))
+        button = customtkinter.CTkButton(self, text="Transcribe", command=lambda:controller.show_frame("TranscribePage"))
         button.pack()
 
-        button1 = tk.Button(self, text="Live", command=lambda:controller.show_frame("LivePage"))
+        button1 = customtkinter.CTkButton(self, text="Live", command=lambda:controller.show_frame("LivePage"))
         button1.pack()
 
-class TranscribePage(tk.Frame):
+class TranscribePage(customtkinter.CTkFrame):
 
     def __init__(self, parent, controller):
-        tk.Frame.__init__(self, parent)
+        customtkinter.CTkFrame.__init__(self, parent)
         self.controller = controller
-        home = ttk.Button(self, text="Back")
-        record = ttk.Button(self, text="Record")
-        pause = ttk.Button(self, text="Pause")
-        play = ttk.Button(self, text="Play")
-        upload = ttk.Button(self, text="Upload File")
-        transcribe = ttk.Button(self, text="Transcribe")
-        self.textarea = Text(self, height = 5, width = 52)
+        home = customtkinter.CTkButton(self, text="Back")
         
-        home.config(command=lambda:controller.show_frame("StartPage"))
-        home.pack()
+        record = customtkinter.CTkButton(self, text="Record")
+        record_tooltip = CTkToolTip(record, delay=0.5, message="Begin recording audio")
+        
+        pause = customtkinter.CTkButton(self, text="Pause")
+        pause_tooltip = CTkToolTip(pause, delay=0.5, message="Pause audio playback")
 
-        record.config(command=lambda: [self.record_callback(), self.update_record_text(record)])
-        record.pack()
+        play = customtkinter.CTkButton(self, text="Play")
+        play_tooltip = CTkToolTip(play, delay=0.5, message="Begin playing saved audio")
 
-        upload.config(command=lambda: [self.upload_file()])
+        upload = customtkinter.CTkButton(self, text="Upload File")
+        upload_tooltip = CTkToolTip(upload, delay=0.5, message="Upload an audio file")
+
+        transcribe = customtkinter.CTkButton(self, text="Transcribe")
+        transcribe_tooltip = CTkToolTip(transcribe, delay=0.5, message="Create transcription from given audio")
+
+        self.textarea = customtkinter.CTkTextbox(self, width = 600, corner_radius=10)
+        
+        home.configure(command=lambda:controller.show_frame("StartPage"))
+        home.pack(side=TOP, anchor=NW, padx=10, pady=10)
+
+        record.configure(command=lambda: [self.record_callback(), self.update_record_text(record)])
+        record.pack(pady=5)
+
+        upload.configure(command=lambda: [self.upload_file()])
         upload.pack()
         
-        play.config(command=lambda: [self.play_recording(play, pause)])
-        play.pack()
+        play.configure(command=lambda: [self.play_recording(play, pause)])
+        play.pack(pady=5)
         
-        pause.config(command=lambda: [self.setPaused(), self.disable_button(pause), self.enable_btn(play)])
+        pause.configure(command=lambda: [self.setPaused(), self.disable_button(pause), self.enable_btn(play)])
         self.disable_button(pause)
         pause.pack()
 
-        transcribe.config(command=lambda: [self.transcript_audio()])
-        transcribe.pack()
+        transcribe.configure(command=lambda: [self.transcript_audio()])
+        transcribe.pack(pady=5)
 
-        self.textarea.pack(pady=15)
+        self.textarea.pack(pady=10)
 
         self.recordThread = threading.Event()
         self.playThread = threading.Event()
@@ -345,9 +358,9 @@ class TranscribePage(tk.Frame):
     # Update GUI Functions
     def update_record_text(self, record):
         if record['text'] == 'Record':
-            record.config(text='Stop Recording')
+            record.configure(text='Stop Recording')
         else:
-            record.config(text='Record')
+            record.configure(text='Record')
 
     def disable_button(self, btn):
         btn['state'] = 'disabled'
@@ -366,12 +379,12 @@ class TranscribePage(tk.Frame):
         else:
             self.record_callback()
 
-class LivePage(tk.Frame):
+class LivePage(customtkinter.CTkFrame):
 
     def __init__(self, parent, controller):
-        tk.Frame.__init__(self, parent)
+        customtkinter.CTkFrame.__init__(self, parent)
         self.controller = controller
-        label = tk.Label(self, text="Live")
+        label = customtkinter.CTkLabel(self, text="Live")
         label.pack()
 
 if __name__ == "__main__":
