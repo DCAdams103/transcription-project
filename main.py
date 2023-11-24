@@ -20,6 +20,7 @@ from gradio_client import Client # Whisper JAX
 from pickle import Pickler, Unpickler
 import customtkinter
 from CTkToolTip import *
+import re
 
 # Fixes blurry text
 windll.shcore.SetProcessDpiAwareness(1)
@@ -347,7 +348,16 @@ class TranscribePage(customtkinter.CTkFrame):
 				True,	# bool in 'Return timestamps' Checkbox component
 				api_name="/predict"
         )
-        print(result)
+        print(result, '\n\n\n')
+        test = re.finditer("\[(.*?)\]", result[0])
+        
+        indexes = []
+        for x in test:
+            indexes.append(x.span(0)[1])
+            # print(x.span(0)[0], ' ', x.group(0))
+
+        # for x in indexes:
+        #     print(x)
 
         #self.textarea.insert(INSERT, result['text'])
         
@@ -357,16 +367,16 @@ class TranscribePage(customtkinter.CTkFrame):
 
     # Update GUI Functions
     def update_record_text(self, record):
-        if record['text'] == 'Record':
+        if record.cget('text') == 'Record':
             record.configure(text='Stop Recording')
         else:
             record.configure(text='Record')
 
     def disable_button(self, btn):
-        btn['state'] = 'disabled'
+        btn.configure(state='disabled')
 
     def enable_btn(self, btn):
-        btn['state'] = 'enabled'
+        btn.configure(state='enabled')
 
     # Reset Value Functions
     def setPaused(self):
