@@ -18,9 +18,11 @@ import io
 import os
 from gradio_client import Client # Whisper JAX
 from pickle import Pickler, Unpickler
+import pickle
 import customtkinter
 from CTkToolTip import *
 import re
+from functools import partial
 
 # Fixes blurry text
 windll.shcore.SetProcessDpiAwareness(1)
@@ -74,6 +76,13 @@ class App(customtkinter.CTk):
         self.mainframe.grid_rowconfigure(0, weight=1)
         self.mainframe.grid_columnconfigure(0, weight=1)
 
+        try:
+            self.transcriptions = pickle.load(open("save.p", "rb"))
+        except FileNotFoundError:
+            print("file not found")
+
+        self.key = ""
+
         self.frames = {}
         for F in (StartPage, TranscribePage, LivePage):
             page = F.__name__
@@ -85,8 +94,9 @@ class App(customtkinter.CTk):
         self.show_frame("StartPage")
 
 
-    def show_frame(self, page):
+    def show_frame(self, page, text=""):
         frame = self.frames[page]
+        frame.update()
         frame.tkraise()
 
     def sr_callback(self, _, audio: sr.AudioData) -> None:
@@ -167,6 +177,7 @@ class StartPage(customtkinter.CTkFrame):
     def __init__(self, parent, controller):
         customtkinter.CTkFrame.__init__(self, parent)
         self.controller = controller
+        self.text=""
 
         label = customtkinter.CTkLabel(self, text="Voice Recognition Transcriber", font=("Arial", 25))
         label.pack(side=TOP)
@@ -179,12 +190,39 @@ class StartPage(customtkinter.CTkFrame):
 
         button1 = customtkinter.CTkButton(self, text="Live", command=lambda:controller.show_frame("LivePage"))
         button1.pack()
+        
+        # db = {'demo': ['filepath', 'text lol lol'], 'demo2': ['filepath2', 'aodjasoidasdas']}
+        # pickle.dump(db, open("save.p", "wb"))
+        
+        buttons = []
+
+        print(self.text)
+
+        for index, key in enumerate(controller.transcriptions):
+            btn = customtkinter.CTkButton(self, text=key, width=150, height=150)
+            btn.configure(command=partial(self.set_key, btn.cget('text')))
+            btn.pack(side=LEFT, padx=20)
+            buttons.append(btn)
+
+
+        button2 = customtkinter.CTkButton(self, text="+", width=150, height=150, command=lambda:controller.show_frame("TranscribePage"))
+        button2.pack(side=LEFT, padx=20)
+
+    def set_key(self, key):
+        print("KEY ", key)
+        self.controller.key = key
+        self.controller.show_frame("TranscribePage")
+
+        
 
 class TranscribePage(customtkinter.CTkFrame):
 
     def __init__(self, parent, controller):
         customtkinter.CTkFrame.__init__(self, parent)
         self.controller = controller
+
+        self.title = customtkinter.CTkLabel(self, text="")
+
         home = customtkinter.CTkButton(self, text="Back")
         
         record = customtkinter.CTkButton(self, text="Record")
@@ -203,7 +241,11 @@ class TranscribePage(customtkinter.CTkFrame):
         transcribe_tooltip = CTkToolTip(transcribe, delay=0.5, message="Create transcription from given audio")
 
         self.textarea = customtkinter.CTkTextbox(self, width = 600, corner_radius=10)
-        
+        self.textarea.bind("<Motion>", self.hover)
+
+        self.title.configure(font=('Arial', 25))
+        self.title.pack(side=TOP)
+
         home.configure(command=lambda:controller.show_frame("StartPage"))
         home.pack(side=TOP, anchor=NW, padx=10, pady=10)
 
@@ -235,6 +277,19 @@ class TranscribePage(customtkinter.CTkFrame):
 
         self.temp_file = NamedTemporaryFile().name
 
+    def hover(self, event):
+        txt = event.widget
+        keyword_begin = txt.index(f"@{event.x},{event.y} linestart")
+        keyword_end = txt.index(f"@{event.x},{event.y} lineend")
+        word = txt.get(keyword_begin, keyword_end)
+        #print(self.textarea.tag_names(txt.index('current')))
+        #print(word)
+
+    def update(self):
+        self.textarea.delete("0.0", "end")
+        self.title.configure(text=self.controller.key)
+        self.textarea.insert("0.0", self.controller.transcriptions[self.controller.key][1])
+        print(self.controller.transcriptions[self.controller.key])
 
     def record_callback(self):
 
@@ -348,16 +403,36 @@ class TranscribePage(customtkinter.CTkFrame):
 				True,	# bool in 'Return timestamps' Checkbox component
 				api_name="/predict"
         )
-        print(result, '\n\n\n')
+        #print(result, '\n\n\n')
+        time = []
         test = re.finditer("\[(.*?)\]", result[0])
+        for match in test:
+            time.append(result[0][match.start():match.end()])
         
+        # Update Textbox
+        clean_result = re.sub("\[(.*?)\]", "", result[0]).strip()
+        #self.textarea.delete("0.0", "end")
+        
+
         indexes = []
         for x in test:
             indexes.append(x.span(0)[1])
             # print(x.span(0)[0], ' ', x.group(0))
 
-        # for x in indexes:
-        #     print(x)
+        #self.textarea.tag_configure("red", background="red")
+
+        last = 0
+        timestamp = ""  
+        for x in indexes:
+            stringtxt = result[0][last:x]
+            # for match in re.finditer("\[(.*?)\]", stringtxt):
+            #     timestamp = stringtxt[match.start():match.end()]
+
+            print(time.pop(0))
+            last=x
+            self.textarea.insert("end", stringtxt)
+
+        #print(self.textarea.tag_ranges("red"))
 
         #self.textarea.insert(INSERT, result['text'])
         
