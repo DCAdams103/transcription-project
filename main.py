@@ -198,11 +198,14 @@ class StartPage(customtkinter.CTkFrame):
 
         print(self.text)
 
-        for index, key in enumerate(controller.transcriptions):
-            btn = customtkinter.CTkButton(self, text=key, width=150, height=150)
-            btn.configure(command=partial(self.set_key, btn.cget('text')))
-            btn.pack(side=LEFT, padx=20)
-            buttons.append(btn)
+        try:
+            for index, key in enumerate(controller.transcriptions):
+                btn = customtkinter.CTkButton(self, text=key, width=150, height=150)
+                btn.configure(command=partial(self.set_key, btn.cget('text')))
+                btn.pack(side=LEFT, padx=20)
+                buttons.append(btn)
+        except Exception as e:
+            print(e)
 
 
         button2 = customtkinter.CTkButton(self, text="+", width=150, height=150, command=lambda:controller.show_frame("TranscribePage"))
@@ -282,14 +285,17 @@ class TranscribePage(customtkinter.CTkFrame):
         keyword_begin = txt.index(f"@{event.x},{event.y} linestart")
         keyword_end = txt.index(f"@{event.x},{event.y} lineend")
         word = txt.get(keyword_begin, keyword_end)
-        #print(self.textarea.tag_names(txt.index('current')))
+        print(self.textarea.tag_names(txt.index('current')))
         #print(word)
 
     def update(self):
-        self.textarea.delete("0.0", "end")
-        self.title.configure(text=self.controller.key)
-        self.textarea.insert("0.0", self.controller.transcriptions[self.controller.key][1])
-        print(self.controller.transcriptions[self.controller.key])
+        try:     
+            self.textarea.delete("0.0", "end")
+            self.title.configure(text=self.controller.key)
+            self.textarea.insert("0.0", self.controller.transcriptions[self.controller.key][1])
+            print(self.controller.transcriptions[self.controller.key])
+        except Exception as e:
+            print(e)
 
     def record_callback(self):
 
@@ -403,34 +409,33 @@ class TranscribePage(customtkinter.CTkFrame):
 				True,	# bool in 'Return timestamps' Checkbox component
 				api_name="/predict"
         )
+        result_copy = result
         #print(result, '\n\n\n')
+
+        # ------------ get all timestamps in result -------------- #
         time = []
+        indexes = []
         test = re.finditer("\[(.*?)\]", result[0])
         for match in test:
+            indexes.append(match.span())
             time.append(result[0][match.start():match.end()])
         
         # Update Textbox
-        clean_result = re.sub("\[(.*?)\]", "", result[0]).strip()
-        #self.textarea.delete("0.0", "end")
-        
+        #clean_result = re.sub("\[(.*?)\]", "", result[0]).strip()
+        self.textarea.delete("0.0", "end")
 
-        indexes = []
-        for x in test:
-            indexes.append(x.span(0)[1])
-            # print(x.span(0)[0], ' ', x.group(0))
+        # --------------- unfinished timestamp stuff -------------- #
 
         #self.textarea.tag_configure("red", background="red")
+        last = indexes[0][1]
+        indexes.pop(0)
 
-        last = 0
-        timestamp = ""  
-        for x in indexes:
-            stringtxt = result[0][last:x]
-            # for match in re.finditer("\[(.*?)\]", stringtxt):
-            #     timestamp = stringtxt[match.start():match.end()]
-
-            print(time.pop(0))
-            last=x
-            self.textarea.insert("end", stringtxt)
+        for ind, x in enumerate(indexes):
+            stringtxt = result_copy[0][last:x[0]]
+            print(stringtxt, '\n\n\n')
+            t = time.pop(0)
+            last=x[1]
+            self.textarea.insert("end", stringtxt, t[1:10])
 
         #print(self.textarea.tag_ranges("red"))
 
@@ -469,8 +474,16 @@ class LivePage(customtkinter.CTkFrame):
     def __init__(self, parent, controller):
         customtkinter.CTkFrame.__init__(self, parent)
         self.controller = controller
+
+        home = customtkinter.CTkButton(self, text="Back")
+
+        home.configure(command=lambda:controller.show_frame("StartPage"))
+        home.pack(side=TOP, anchor=NW, padx=10, pady=10)
+
         label = customtkinter.CTkLabel(self, text="Live")
         label.pack()
+
+
 
 if __name__ == "__main__":
     app = App()
