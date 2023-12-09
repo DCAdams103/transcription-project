@@ -33,7 +33,6 @@ sample_format = pyaudio.paInt16 # 16 bits per sample
 channels = 1
 fs = 44100
 seconds = 3
-filename = "output.wav"
 
 
 class App(customtkinter.CTk):
@@ -41,6 +40,7 @@ class App(customtkinter.CTk):
         super().__init__()
         self.title("Voice Recognition")
         self.geometry("800x600")
+        #self.resizable(False, False)
         customtkinter.set_appearance_mode("Dark")
         customtkinter.set_default_color_theme("dark-blue")
         
@@ -185,37 +185,79 @@ class StartPage(customtkinter.CTkFrame):
         label2 = customtkinter.CTkLabel(self, text="By Team 2")
         label2.pack(side=TOP)
 
-        button = customtkinter.CTkButton(self, text="Transcribe", command=lambda:controller.show_frame("TranscribePage"))
-        button.pack()
+        #button = customtkinter.CTkButton(self, text="Transcribe", command=lambda:controller.show_frame("TranscribePage"))
+        #button.pack()
 
-        button1 = customtkinter.CTkButton(self, text="Live", command=lambda:controller.show_frame("LivePage"))
-        button1.pack()
+        #button1 = customtkinter.CTkButton(self, text="Live", command=lambda:controller.show_frame("LivePage"))
+        #button1.pack()
         
-        # db = {'demo': ['filepath', 'text lol lol'], 'demo2': ['filepath2', 'aodjasoidasdas']}
+        # db = {}
         # pickle.dump(db, open("save.p", "wb"))
         
-        buttons = []
-
-        print(self.text)
+        self.buttons = []
 
         try:
             for index, key in enumerate(controller.transcriptions):
                 btn = customtkinter.CTkButton(self, text=key, width=150, height=150)
                 btn.configure(command=partial(self.set_key, btn.cget('text')))
                 btn.pack(side=LEFT, padx=20)
-                buttons.append(btn)
+                self.buttons.append(btn)
         except Exception as e:
             print(e)
 
 
-        button2 = customtkinter.CTkButton(self, text="+", width=150, height=150, command=lambda:controller.show_frame("TranscribePage"))
-        button2.pack(side=LEFT, padx=20)
+        self.create_new = customtkinter.CTkButton(self, text="+", width=150, height=150, command=lambda:[self.new_transcription(), controller.show_frame("TranscribePage")])
+        self.create_new.pack(side=LEFT, padx=20)
+
+    def update(self):
+        try:
+
+            # Unpack existing buttons
+            for button in self.buttons:
+                button.pack_forget()
+
+            self.create_new.pack_forget()
+            
+            existing = pickle.load(open("save.p", "rb"))
+            
+            # Pack buttons again, showing any new entries or changes
+            for index, key in enumerate(existing):
+                btn = customtkinter.CTkButton(self, text=key, width=150, height=150)
+                btn.configure(command=partial(self.set_key, btn.cget('text')))
+                btn.pack(side=LEFT, padx=20)
+                self.buttons.append(btn)
+            
+            self.create_new.pack(side=LEFT, padx=20)
+        except Exception as e:
+            print(e)
 
     def set_key(self, key):
-        print("KEY ", key)
         self.controller.key = key
         self.controller.show_frame("TranscribePage")
 
+    def new_transcription(self):
+
+        self.controller.key = "New Transcription 1"
+        temp = self.controller.key
+
+        # Last character of title
+        last = temp[len(temp)-1]
+
+        try:
+            existing = pickle.load(open("save.p", "rb"))
+            
+            for key in existing:
+                # Check to see if the transcription already exists
+                if temp in existing:
+                    if last.isdigit():
+                        last = str(int(last) + 1)
+                        # If new title does not exists, use it
+                        if 'New Transcription ' + str(last) not in existing:
+                            self.controller.key = self.controller.key[:-1] + str(last)
+                            break
+
+        except FileNotFoundError:
+            print("file not found")
         
 
 class TranscribePage(customtkinter.CTkFrame):
@@ -224,7 +266,7 @@ class TranscribePage(customtkinter.CTkFrame):
         customtkinter.CTkFrame.__init__(self, parent)
         self.controller = controller
 
-        self.title = customtkinter.CTkLabel(self, text="")
+        self.title = customtkinter.CTkEntry(self, textvariable=tk.StringVar(self, self.controller.key), justify="center")
 
         home = customtkinter.CTkButton(self, text="Back")
         
@@ -245,8 +287,8 @@ class TranscribePage(customtkinter.CTkFrame):
 
         self.textarea = customtkinter.CTkTextbox(self, width = 600, corner_radius=10)
         self.textarea.bind("<Motion>", self.hover)
-
-        self.title.configure(font=('Arial', 25))
+        
+        self.title.configure(font=('Arial', 25), width=300, height=10)
         self.title.pack(side=TOP)
 
         home.configure(command=lambda:controller.show_frame("StartPage"))
@@ -270,6 +312,11 @@ class TranscribePage(customtkinter.CTkFrame):
 
         self.textarea.pack(pady=10)
 
+        save = customtkinter.CTkButton(self, text="Save")
+        save_tooltop = CTkToolTip(save, delay=0.5, message="Save your transcription")
+        save.configure(command=lambda: [self.save()])
+        save.pack()
+
         self.recordThread = threading.Event()
         self.playThread = threading.Event()
         self.stream = None
@@ -277,6 +324,9 @@ class TranscribePage(customtkinter.CTkFrame):
         self.recording = False
         self.playing = False
         self.paused = False
+
+        self.save_transcript_copy = ""
+        self.title_orig = ""
 
         self.temp_file = NamedTemporaryFile().name
 
@@ -291,11 +341,38 @@ class TranscribePage(customtkinter.CTkFrame):
     def update(self):
         try:     
             self.textarea.delete("0.0", "end")
-            self.title.configure(text=self.controller.key)
-            self.textarea.insert("0.0", self.controller.transcriptions[self.controller.key][1])
-            print(self.controller.transcriptions[self.controller.key])
+            self.title.configure(textvariable=tk.StringVar(self, self.controller.key))
+            self.title_orig = self.controller.key
+            file = pickle.load(open("save.p", "rb"))
+            self.add_tags([file[self.controller.key][1]])
+
         except Exception as e:
             print(e)
+
+    def save(self):
+        file = {}
+
+        try:
+            file = pickle.load(open("save.p", "rb"))
+
+            # If this is a new, unsaved transcription
+            if self.title_orig not in file:
+                file.update({self.title_orig.rstrip(): ["".join(self.title_orig.split()) + '.wav', self.save_transcript_copy]})
+                pickle.dump(file, open("save.p", "wb"))
+
+            # If the new title is not already used, change the sound file's name and update the name in the dictionary, then save.
+            if (self.title.cget('textvariable').get() not in file) and (self.title_orig != self.title.cget('textvariable').get()):
+                    if os.path.exists("".join(self.title_orig.split()) + '.wav'):
+                        os.rename("".join(self.title_orig.split()) + '.wav', "".join(self.title.cget('textvariable').get().split()) + '.wav')
+                    file[self.title.cget('textvariable').get()] = file.pop(self.title_orig)
+                    pickle.dump(file, open("save.p", "wb"))
+        
+        except Exception as e:
+            print(e)
+
+            
+        # Error msg
+
 
     def record_callback(self):
 
@@ -336,7 +413,7 @@ class TranscribePage(customtkinter.CTkFrame):
         p.terminate()
 
         # Save recorded data as a WAV file
-        wf = wave.open(filename, 'wb')
+        wf = wave.open("".join(self.title_orig.split()) + '.wav', 'wb')
         wf.setnchannels(channels)
         wf.setsampwidth(p.get_sample_size(sample_format))
         wf.setframerate(fs)
@@ -348,7 +425,8 @@ class TranscribePage(customtkinter.CTkFrame):
     # Upload File
     def upload_file(self):
         filePath = filedialog.askopenfilename(initialdir='/', title='Select a file', filetypes=(('wav', '*.wav'), ('mp3', '*.mp3')))
-        shutil.copy(r''+filePath, 'output.wav')
+        print("FILE ", self.title_orig)
+        shutil.copy(r''+filePath, "".join(self.title_orig.split()) + '.wav')
 
     def play_recording(self, play, pause):
 
@@ -363,7 +441,15 @@ class TranscribePage(customtkinter.CTkFrame):
     # Play Recording 
     def play_thread(self, play, pause):
         try:
-            # Open sound file
+            
+            filename = ""
+            # Determine if sound file is .wav or .mp3
+            if os.path.exists("".join(self.title_orig.split()) + ".wav"):
+                filename = "".join(self.title_orig.split()) + ".wav"
+            elif os.path.exists("".join(self.title_orig.split()) + ".mp3"):
+                filename = "".join(self.title_orig.split()) + ".mp3"
+
+            
             wf = wave.open(filename, 'rb')
             p = pyaudio.PyAudio()
 
@@ -401,46 +487,60 @@ class TranscribePage(customtkinter.CTkFrame):
             self.playThread.clear()
 
     def transcript_thread(self):
-        # result = self.model.transcribe("output.wav", fp16=torch.cuda.is_available())
+        
+        # Whisper JAX API
         client = Client("https://sanchit-gandhi-whisper-jax.hf.space/")
-        result = client.predict(
-				"output.wav",	# str (filepath or URL to file) in 'inputs' Audio component
-				"transcribe",	# str in 'Task' Radio component
-				True,	# bool in 'Return timestamps' Checkbox component
-				api_name="/predict"
-        )
-        result_copy = result
-        #print(result, '\n\n\n')
 
-        # ------------ get all timestamps in result -------------- #
+        # Determine if the file is .wav or .mp3
+        filename = ""
+        if os.path.exists("".join(self.title_orig.split()) + ".wav"):
+            filename = "".join(self.title_orig.split()) + ".wav"
+        elif os.path.exists("".join(self.title_orig.split()) + ".mp3"):
+            filename = "".join(self.title_orig.split()) + ".mp3"
+
+        # Use Whisper JAX to transcribe the audio
+        try:
+            result = client.predict(
+                    filename,	# str (filepath or URL to file) in 'inputs' Audio component
+                    "transcribe",	# str in 'Task' Radio component
+                    True,	# bool in 'Return timestamps' Checkbox component
+                    api_name="/predict"
+            )
+        except FileNotFoundError:
+            print("File does not exist")
+        
+        # Save unaltered result to save into the save file
+        self.save_transcript_copy = result[0]
+
+        # Add timestamp tags and insert text into textbox
+        self.add_tags(result)
+        
+    
+    def add_tags(self, result):
+
+        result_copy = result
         time = []
         indexes = []
+
+        # RegEx to find all timestamp values
         test = re.finditer("\[(.*?)\]", result[0])
         for match in test:
             indexes.append(match.span())
             time.append(result[0][match.start():match.end()])
         
-        # Update Textbox
-        #clean_result = re.sub("\[(.*?)\]", "", result[0]).strip()
+        # Clear Textbox
         self.textarea.delete("0.0", "end")
 
-        # --------------- unfinished timestamp stuff -------------- #
-
-        #self.textarea.tag_configure("red", background="red")
+        # Assign tags and update textbox
         last = indexes[0][1]
         indexes.pop(0)
 
         for ind, x in enumerate(indexes):
             stringtxt = result_copy[0][last:x[0]]
-            print(stringtxt, '\n\n\n')
             t = time.pop(0)
             last=x[1]
             self.textarea.insert("end", stringtxt, t[1:10])
 
-        #print(self.textarea.tag_ranges("red"))
-
-        #self.textarea.insert(INSERT, result['text'])
-        
     def transcript_audio(self):
         t = threading.Thread(target=self.transcript_thread)
         t.start()
