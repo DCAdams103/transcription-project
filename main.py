@@ -484,6 +484,7 @@ class TranscribePage(customtkinter.CTkFrame):
             try:
                 wf = wave.open(filename, 'rb')
             except wave.Error:
+                # If the wave file is in the incorrect format, create a copy and use that instead
                 x,_ = librosa.load(filename, sr=16000)
                 sf.write('tmp.wav', x, 16000)
                 wf = wave.open('tmp.wav', 'rb')
