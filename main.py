@@ -23,6 +23,9 @@ import customtkinter
 from CTkToolTip import *
 import re
 from functools import partial
+from datetime import datetime
+import librosa
+import soundfile as sf
 
 # Fixes blurry text
 windll.shcore.SetProcessDpiAwareness(1)
@@ -273,11 +276,11 @@ class TranscribePage(customtkinter.CTkFrame):
         record = customtkinter.CTkButton(self, text="Record")
         record_tooltip = CTkToolTip(record, delay=0.5, message="Begin recording audio")
         
-        pause = customtkinter.CTkButton(self, text="Pause")
-        pause_tooltip = CTkToolTip(pause, delay=0.5, message="Pause audio playback")
+        self.pause = customtkinter.CTkButton(self, text="Pause")
+        pause_tooltip = CTkToolTip(self.pause, delay=0.5, message="Pause audio playback")
 
-        play = customtkinter.CTkButton(self, text="Play")
-        play_tooltip = CTkToolTip(play, delay=0.5, message="Begin playing saved audio")
+        self.play = customtkinter.CTkButton(self, text="Play")
+        play_tooltip = CTkToolTip(self.play, delay=0.5, message="Begin playing saved audio")
 
         upload = customtkinter.CTkButton(self, text="Upload File")
         upload_tooltip = CTkToolTip(upload, delay=0.5, message="Upload an audio file")
@@ -287,6 +290,7 @@ class TranscribePage(customtkinter.CTkFrame):
 
         self.textarea = customtkinter.CTkTextbox(self, width = 600, corner_radius=10)
         self.textarea.bind("<Motion>", self.hover)
+        self.textarea.bind("<Button-1>", self.click)
         
         self.title.configure(font=('Arial', 25), width=300, height=10)
         self.title.pack(side=TOP)
@@ -300,12 +304,12 @@ class TranscribePage(customtkinter.CTkFrame):
         upload.configure(command=lambda: [self.upload_file()])
         upload.pack()
         
-        play.configure(command=lambda: [self.play_recording(play, pause)])
-        play.pack(pady=5)
+        self.play.configure(command=lambda: [self.play_recording(self.pause)])
+        self.play.pack(pady=5)
         
-        pause.configure(command=lambda: [self.setPaused(), self.disable_button(pause), self.enable_btn(play)])
-        self.disable_button(pause)
-        pause.pack()
+        self.pause.configure(command=lambda: [self.setPaused(), self.disable_button(self.pause), self.enable_btn(self.play)])
+        self.disable_button(self.pause)
+        self.pause.pack()
 
         transcribe.configure(command=lambda: [self.transcript_audio()])
         transcribe.pack(pady=5)
@@ -328,14 +332,40 @@ class TranscribePage(customtkinter.CTkFrame):
         self.save_transcript_copy = ""
         self.title_orig = ""
 
+        self.last_hover_start = None
+        self.last_hover_end = None
+
+        self.clicked_timestamp = ""
+
         self.temp_file = NamedTemporaryFile().name
+
+    def click(self, event):
+        txt = event.widget
+        keyword_begin = txt.index(f"@{event.x},{event.y} linestart")
+        keyword_end = txt.index(f"@{event.x},{event.y} lineend")
+        word = txt.get(keyword_begin, keyword_end)
+        self.clicked_timestamp = self.textarea.tag_names(txt.index('current'))[0]
+        dt = datetime.strptime(self.clicked_timestamp, "%M:%S.%f")
+
+        if not self.playing and not self.paused:
+            secs = dt.second + (60*dt.minute)
+            self.play_recording(secs)
+        
 
     def hover(self, event):
         txt = event.widget
         keyword_begin = txt.index(f"@{event.x},{event.y} linestart")
         keyword_end = txt.index(f"@{event.x},{event.y} lineend")
-        word = txt.get(keyword_begin, keyword_end)
-        print(self.textarea.tag_names(txt.index('current')))
+        
+        if self.last_hover_start != keyword_begin:
+            txt.tag_delete("highlight")
+            self.last_hover_start = keyword_begin
+            self.last_hover_end = keyword_end
+
+            word = txt.get(keyword_begin, keyword_end)
+            txt.tag_add("highlight", keyword_begin, keyword_end)
+            txt.tag_config("highlight", background="firebrick")
+            print(self.textarea.tag_names(txt.index('current')))
         #print(word)
 
     def update(self):
@@ -428,18 +458,18 @@ class TranscribePage(customtkinter.CTkFrame):
         print("FILE ", self.title_orig)
         shutil.copy(r''+filePath, "".join(self.title_orig.split()) + '.wav')
 
-    def play_recording(self, play, pause):
+    def play_recording(self, skip_seconds=0):
 
         if self.playing:
             self.paused = False
-            self.enable_btn(pause)
+            self.enable_btn(self.pause)
         else:
             self.playThread.set()
-            t = threading.Thread(target=self.play_thread, args=(play, pause,))
+            t = threading.Thread(target=self.play_thread, args=(skip_seconds,))
             t.start()
 
     # Play Recording 
-    def play_thread(self, play, pause):
+    def play_thread(self, skip_seconds=0):
         try:
             
             filename = ""
@@ -449,19 +479,35 @@ class TranscribePage(customtkinter.CTkFrame):
             elif os.path.exists("".join(self.title_orig.split()) + ".mp3"):
                 filename = "".join(self.title_orig.split()) + ".mp3"
 
+            print("FILENAME ", filename)
             
-            wf = wave.open(filename, 'rb')
-            p = pyaudio.PyAudio()
+            try:
+                wf = wave.open(filename, 'rb')
+            except wave.Error:
+                x,_ = librosa.load(filename, sr=16000)
+                sf.write('tmp.wav', x, 16000)
+                wf = wave.open('tmp.wav', 'rb')
+                print('converted')
 
+            p = pyaudio.PyAudio()
             self.playing = True
 
-            self.enable_btn(pause)
-            self.disable_button(play)
+            self.enable_btn(self.pause)
+            self.disable_button(self.play)
 
             stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
                             channels=wf.getnchannels(),
                             rate=wf.getframerate(),
                             output=True)
+
+            # Skip ahead in the audio
+            if skip_seconds > 0:
+                sample_rate = wf.getframerate()
+                count = 0
+                samples = int(skip_seconds * sample_rate)
+                while count < samples:
+                    wf.readframes(chunk)
+                    count += chunk
 
             # Read data in chunks
             data = wf.readframes(chunk)
@@ -471,6 +517,8 @@ class TranscribePage(customtkinter.CTkFrame):
                 if not self.paused:
                     stream.write(data)
                     data = wf.readframes(chunk)
+                else:
+                    time.sleep(0.5)
 
             # Close and terminate the stream
             stream.close()
@@ -478,8 +526,8 @@ class TranscribePage(customtkinter.CTkFrame):
             self.playThread.clear()
             self.playing = False
             self.paused = False
-            self.disable_button(pause)
-            self.enable_btn(play)
+            self.disable_button(self.pause)
+            self.enable_btn(self.play)
 
             print("Play finished")
         except (FileNotFoundError):
