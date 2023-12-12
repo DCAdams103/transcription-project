@@ -26,6 +26,7 @@ from functools import partial
 from datetime import datetime
 import librosa
 import soundfile as sf
+import sys
 
 # Fixes blurry text
 windll.shcore.SetProcessDpiAwareness(1)
@@ -36,6 +37,7 @@ sample_format = pyaudio.paInt16 # 16 bits per sample
 channels = 1
 fs = 44100
 seconds = 3
+thread_end = False
 
 
 class App(customtkinter.CTk):
@@ -43,6 +45,7 @@ class App(customtkinter.CTk):
         super().__init__()
         self.title("Voice Recognition")
         self.geometry("800x600")
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
         #self.resizable(False, False)
         customtkinter.set_appearance_mode("Dark")
         customtkinter.set_default_color_theme("dark-blue")
@@ -96,6 +99,10 @@ class App(customtkinter.CTk):
         
         self.show_frame("StartPage")
 
+    def on_closing(self):
+        global thread_end
+        thread_end = True
+        self.destroy()
 
     def show_frame(self, page, text=""):
         frame = self.frames[page]
@@ -304,7 +311,7 @@ class TranscribePage(customtkinter.CTkFrame):
         upload.configure(command=lambda: [self.upload_file()])
         upload.pack()
         
-        self.play.configure(command=lambda: [self.play_recording(self.pause)])
+        self.play.configure(command=lambda: [self.play_recording(0)])
         self.play.pack(pady=5)
         
         self.pause.configure(command=lambda: [self.setPaused(), self.disable_button(self.pause), self.enable_btn(self.play)])
@@ -315,6 +322,11 @@ class TranscribePage(customtkinter.CTkFrame):
         transcribe.pack(pady=5)
 
         self.textarea.pack(pady=10)
+
+        export = customtkinter.CTkButton(self, text="Export")
+        export_tooltip = CTkToolTip(export, delay=0.5, message="Export your transcription to a *.txt file")
+        export.configure(command=lambda: [self.export()])
+        export.pack()
 
         save = customtkinter.CTkButton(self, text="Save")
         save_tooltop = CTkToolTip(save, delay=0.5, message="Save your transcription")
@@ -339,19 +351,31 @@ class TranscribePage(customtkinter.CTkFrame):
 
         self.temp_file = NamedTemporaryFile().name
 
+    def export(self):
+        save_file = tk.filedialog.asksaveasfilename(initialdir='/', title="Select Directory and Filename", defaultextension='.txt', filetypes=[(".txt",".txt")])
+        f = open(save_file, "w")
+        f.write(self.textarea.get("0.0", "end"))
+        f.close()
+
     def click(self, event):
-        txt = event.widget
-        keyword_begin = txt.index(f"@{event.x},{event.y} linestart")
-        keyword_end = txt.index(f"@{event.x},{event.y} lineend")
-        word = txt.get(keyword_begin, keyword_end)
-        self.clicked_timestamp = self.textarea.tag_names(txt.index('current'))[0]
-        dt = datetime.strptime(self.clicked_timestamp, "%M:%S.%f")
-
-        if not self.playing and not self.paused:
-            secs = dt.second + (60*dt.minute)
-            self.play_recording(secs)
         
+        try:
+            txt = event.widget
+            keyword_begin = txt.index(f"@{event.x},{event.y} linestart")
+            keyword_end = txt.index(f"@{event.x},{event.y} lineend")
+            word = txt.get(keyword_begin, keyword_end)
 
+            self.clicked_timestamp = self.textarea.tag_names(txt.index('current'))[0]
+            dt = datetime.strptime(self.clicked_timestamp, "%M:%S.%f")
+
+            if not self.playing and not self.paused:
+                secs = dt.second + (60*dt.minute)
+                self.play_recording(secs)
+        except Exception as e:
+            print(e)
+
+        
+        
     def hover(self, event):
         txt = event.widget
         keyword_begin = txt.index(f"@{event.x},{event.y} linestart")
@@ -458,7 +482,7 @@ class TranscribePage(customtkinter.CTkFrame):
         print("FILE ", self.title_orig)
         shutil.copy(r''+filePath, "".join(self.title_orig.split()) + '.wav')
 
-    def play_recording(self, skip_seconds=0):
+    def play_recording(self, skip_seconds: int):
 
         if self.playing:
             self.paused = False
@@ -469,7 +493,7 @@ class TranscribePage(customtkinter.CTkFrame):
             t.start()
 
     # Play Recording 
-    def play_thread(self, skip_seconds=0):
+    def play_thread(self, skip_seconds: int):
         try:
             
             filename = ""
@@ -514,7 +538,7 @@ class TranscribePage(customtkinter.CTkFrame):
             data = wf.readframes(chunk)
 
             # Play the sound by writing audio data to stream
-            while data != b'' and self.playing:
+            while data != b'' and self.playing and not thread_end:
                 if not self.paused:
                     stream.write(data)
                     data = wf.readframes(chunk)
@@ -547,6 +571,8 @@ class TranscribePage(customtkinter.CTkFrame):
         elif os.path.exists("".join(self.title_orig.split()) + ".mp3"):
             filename = "".join(self.title_orig.split()) + ".mp3"
 
+        print(filename)
+
         # Use Whisper JAX to transcribe the audio
         try:
             result = client.predict(
@@ -561,6 +587,8 @@ class TranscribePage(customtkinter.CTkFrame):
         # Save unaltered result to save into the save file
         self.save_transcript_copy = result[0]
 
+        print(result)
+
         # Add timestamp tags and insert text into textbox
         self.add_tags(result)
         
@@ -573,6 +601,7 @@ class TranscribePage(customtkinter.CTkFrame):
 
         # RegEx to find all timestamp values
         test = re.finditer("\[(.*?)\]", result[0])
+        
         for match in test:
             indexes.append(match.span())
             time.append(result[0][match.start():match.end()])
@@ -584,8 +613,16 @@ class TranscribePage(customtkinter.CTkFrame):
         last = indexes[0][1]
         indexes.pop(0)
 
+        # If there is only one timestamp
+        if(len(indexes) == 0):
+            stringtxt = result_copy[0][last:len(result_copy[0])]
+            t = time.pop(0)
+            self.textarea.insert("end", stringtxt, t[1:10])
+            return
+
         for ind, x in enumerate(indexes):
             stringtxt = result_copy[0][last:x[0]]
+            print("STRRING ", stringtxt)
             t = time.pop(0)
             last=x[1]
             self.textarea.insert("end", stringtxt, t[1:10])
