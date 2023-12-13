@@ -27,6 +27,7 @@ from datetime import datetime
 import librosa
 import soundfile as sf
 import sys
+from deep_translator import GoogleTranslator
 
 # Fixes blurry text
 windll.shcore.SetProcessDpiAwareness(1)
@@ -46,7 +47,7 @@ class App(customtkinter.CTk):
         self.title("Voice Recognition")
         self.geometry("800x600")
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
-        #self.resizable(False, False)
+        self.resizable(False, False)
         customtkinter.set_appearance_mode("Dark")
         customtkinter.set_default_color_theme("dark-blue")
         
@@ -181,7 +182,6 @@ class App(customtkinter.CTk):
         l = threading.Thread(target=self.live_loop)
         l.start()
 
-
 class StartPage(customtkinter.CTkFrame):
 
     def __init__(self, parent, controller):
@@ -201,8 +201,9 @@ class StartPage(customtkinter.CTkFrame):
         #button1 = customtkinter.CTkButton(self, text="Live", command=lambda:controller.show_frame("LivePage"))
         #button1.pack()
         
-        # db = {}
-        # pickle.dump(db, open("save.p", "wb"))
+        if not os.path.exists("save.p"):
+            db = {}
+            pickle.dump(db, open("save.p", "wb"))
         
         self.buttons = []
 
@@ -269,12 +270,27 @@ class StartPage(customtkinter.CTkFrame):
         except FileNotFoundError:
             print("file not found")
         
+class Loading(customtkinter.CTkToplevel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.title("Loading...")
+        self.geometry("400x150")
+        self.protocol("WM_DELETE_WINDOW", None)
+        self.resizable(False, False)
+        
+        self.label = customtkinter.CTkLabel(self, text="", font=('Arial', 25))
+        self.label.pack(padx=20, pady=20)
+
+    def set_message(self, message):
+        self.label.configure(text=message)
 
 class TranscribePage(customtkinter.CTkFrame):
 
     def __init__(self, parent, controller):
         customtkinter.CTkFrame.__init__(self, parent)
         self.controller = controller
+        #self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
 
         self.title = customtkinter.CTkEntry(self, textvariable=tk.StringVar(self, self.controller.key), justify="center")
 
@@ -295,43 +311,48 @@ class TranscribePage(customtkinter.CTkFrame):
         transcribe = customtkinter.CTkButton(self, text="Transcribe")
         transcribe_tooltip = CTkToolTip(transcribe, delay=0.5, message="Create transcription from given audio")
 
-        self.textarea = customtkinter.CTkTextbox(self, width = 600, corner_radius=10)
-        self.textarea.bind("<Motion>", self.hover)
-        self.textarea.bind("<Button-1>", self.click)
+        self.textarea = customtkinter.CTkTextbox(self, width=600, corner_radius=10)
         
         self.title.configure(font=('Arial', 25), width=300, height=10)
-        self.title.pack(side=TOP)
+        self.title.grid(column=1, row=1)
 
         home.configure(command=lambda:controller.show_frame("StartPage"))
-        home.pack(side=TOP, anchor=NW, padx=10, pady=10)
+        home.grid(column=1, row=1, padx=10, pady=10, sticky="w")
 
         record.configure(command=lambda: [self.record_callback(), self.update_record_text(record)])
-        record.pack(pady=5)
+        record.grid(column=1, row=2, pady=5)
 
         upload.configure(command=lambda: [self.upload_file()])
-        upload.pack()
+        upload.grid(column=1, row=3)
         
         self.play.configure(command=lambda: [self.play_recording(0)])
-        self.play.pack(pady=5)
+        self.play.grid(column=1, row=4)
         
         self.pause.configure(command=lambda: [self.setPaused(), self.disable_button(self.pause), self.enable_btn(self.play)])
         self.disable_button(self.pause)
-        self.pause.pack()
+        self.pause.grid(column=1, row=5)
 
         transcribe.configure(command=lambda: [self.transcript_audio()])
-        transcribe.pack(pady=5)
+        transcribe.grid(column=1, row=6, pady=5)
+        
+        self.translate_menu = customtkinter.CTkOptionMenu(self, values=["English", "Spanish", "French", "German"])
+        self.translate_menu.grid(column=1, row=3, padx=(150, 0), sticky="w")
 
-        self.textarea.pack(pady=10)
+        translate = customtkinter.CTkButton(self, text="Translate Text")
+        translate.configure(command=lambda: [self.translate()])
+        translate.grid(column=1, row=4, pady=5, padx=(150, 0), sticky="w")
+
+        self.textarea.grid(column=1,row=7)
 
         export = customtkinter.CTkButton(self, text="Export")
         export_tooltip = CTkToolTip(export, delay=0.5, message="Export your transcription to a *.txt file")
         export.configure(command=lambda: [self.export()])
-        export.pack()
+        export.grid(column=1, row=8, pady=5)
 
         save = customtkinter.CTkButton(self, text="Save")
         save_tooltop = CTkToolTip(save, delay=0.5, message="Save your transcription")
         save.configure(command=lambda: [self.save()])
-        save.pack()
+        save.grid(column=1, row=9)
 
         self.recordThread = threading.Event()
         self.playThread = threading.Event()
@@ -348,6 +369,8 @@ class TranscribePage(customtkinter.CTkFrame):
         self.last_hover_end = None
 
         self.clicked_timestamp = ""
+
+        self.toplevel_window = None
 
         self.temp_file = NamedTemporaryFile().name
 
@@ -373,9 +396,7 @@ class TranscribePage(customtkinter.CTkFrame):
                 self.play_recording(secs)
         except Exception as e:
             print(e)
-
-        
-        
+      
     def hover(self, event):
         txt = event.widget
         keyword_begin = txt.index(f"@{event.x},{event.y} linestart")
@@ -409,24 +430,34 @@ class TranscribePage(customtkinter.CTkFrame):
         try:
             file = pickle.load(open("save.p", "rb"))
 
+            if self.save_transcript_copy == "":
+                self.save_transcript_copy = self.textarea.get("0.0", "end")
+                return
+            
             # If this is a new, unsaved transcription
             if self.title_orig not in file:
                 file.update({self.title_orig.rstrip(): ["".join(self.title_orig.split()) + '.wav', self.save_transcript_copy]})
                 pickle.dump(file, open("save.p", "wb"))
+                return
 
             # If the new title is not already used, change the sound file's name and update the name in the dictionary, then save.
             if (self.title.cget('textvariable').get() not in file) and (self.title_orig != self.title.cget('textvariable').get()):
-                    if os.path.exists("".join(self.title_orig.split()) + '.wav'):
-                        os.rename("".join(self.title_orig.split()) + '.wav', "".join(self.title.cget('textvariable').get().split()) + '.wav')
-                    file[self.title.cget('textvariable').get()] = file.pop(self.title_orig)
+                    if os.path.exists("".join(self.title_orig.strip()) + '.wav'):
+                        os.rename("".join(self.title_orig.strip()) + '.wav', "".join(self.title.cget('textvariable').get().split()) + '.wav')
+                    file[self.title.cget('textvariable').get().rstrip()] = file.pop(self.title_orig)
                     pickle.dump(file, open("save.p", "wb"))
+                    return
+
+            if (self.title.cget('textvariable').get() in file):
+                file.update({self.title.cget('textvariable').get().rstrip(): ["".join(self.title_orig.split()) + '.wav', self.save_transcript_copy]})
+                pickle.dump(file, open("save.p", "wb"))
+                return
         
         except Exception as e:
             print(e)
 
             
         # Error msg
-
 
     def record_callback(self):
 
@@ -561,6 +592,8 @@ class TranscribePage(customtkinter.CTkFrame):
 
     def transcript_thread(self):
         
+        self.create_loading_window("Please wait while\nwe transcribe your audio.....\nThis may take a while")
+
         # Whisper JAX API
         client = Client("https://sanchit-gandhi-whisper-jax.hf.space/")
 
@@ -583,6 +616,8 @@ class TranscribePage(customtkinter.CTkFrame):
             )
         except FileNotFoundError:
             print("File does not exist")
+
+        self.destroy_loading_window()
         
         # Save unaltered result to save into the save file
         self.save_transcript_copy = result[0]
@@ -592,7 +627,6 @@ class TranscribePage(customtkinter.CTkFrame):
         # Add timestamp tags and insert text into textbox
         self.add_tags(result)
         
-    
     def add_tags(self, result):
 
         result_copy = result
@@ -607,29 +641,67 @@ class TranscribePage(customtkinter.CTkFrame):
             time.append(result[0][match.start():match.end()])
         
         # Clear Textbox
-        self.textarea.delete("0.0", "end")
+        if(time and indexes):
+            self.textarea.bind("<Motion>", self.hover)
+            self.textarea.bind("<Button-1>", self.click)
+            self.textarea.delete("0.0", "end")
 
-        # Assign tags and update textbox
-        last = indexes[0][1]
-        indexes.pop(0)
+            # Assign tags and update textbox
+            last = indexes[0][1]
+            indexes.pop(0)
 
-        # If there is only one timestamp
-        if(len(indexes) == 0):
-            stringtxt = result_copy[0][last:len(result_copy[0])]
-            t = time.pop(0)
-            self.textarea.insert("end", stringtxt, t[1:10])
-            return
+            # If there is only one timestamp
+            if(len(indexes) == 0):
+                stringtxt = result_copy[0][last:len(result_copy[0])]
+                t = time.pop(0)
+                self.textarea.insert("end", stringtxt, t[1:10])
+                return
 
-        for ind, x in enumerate(indexes):
-            stringtxt = result_copy[0][last:x[0]]
-            print("STRRING ", stringtxt)
-            t = time.pop(0)
-            last=x[1]
-            self.textarea.insert("end", stringtxt, t[1:10])
+            for ind, x in enumerate(indexes):
+                stringtxt = result_copy[0][last:x[0]]
+                t = time.pop(0)
+                last=x[1]
+                self.textarea.insert("end", stringtxt, t[1:10])
+        else: # If there are no timestamps (such as translations)
+            self.textarea.insert("0.0", result[0])
 
     def transcript_audio(self):
         t = threading.Thread(target=self.transcript_thread)
         t.start()
+
+    def translate(self):
+        t = threading.Thread(target=self.translate_thread)
+        t.start()
+
+    def translate_thread(self):
+
+        self.create_loading_window("Please wait while\nwe translate your text...")
+        
+        translator = GoogleTranslator(source='auto', target=self.translate_menu.get().lower()).translate(self.textarea.get("0.0", "end"))
+        
+        self.save_transcript_copy = translator
+        
+        self.textarea.delete("0.0", "end")
+
+        self.textarea.insert("0.0", translator)
+        self.textarea.unbind("<Motion>")
+        self.textarea.unbind("<Button-1>")
+        for tag in self.textarea.tag_names():
+            self.textarea.tag_delete(tag)
+
+        self.destroy_loading_window()
+
+    def create_loading_window(self, message):
+        if self.toplevel_window is None or not self.toplevel_window.winfo_exists():
+            self.toplevel_window = Loading(self)
+            self.toplevel_window.grab_set()
+            self.toplevel_window.set_message(message)
+        else:
+            self.toplevel_window.focus()
+
+    def destroy_loading_window(self):
+        if self.toplevel_window is not None:
+            self.toplevel_window.destroy()
 
     # Update GUI Functions
     def update_record_text(self, record):
